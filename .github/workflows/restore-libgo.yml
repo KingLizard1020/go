@@ -1,0 +1,48 @@
+name: restore-libgo
+on:
+  workflow_dispatch:
+  push:
+    branches: [cursor/restore-libgo-fddb]
+permissions:
+  contents: write
+jobs:
+  restore:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: cl-81163-linker-cc-args-v2
+          fetch-depth: 0
+      - name: Restore lib.go and drop empty-linker guards
+        env:
+          GOOD: 91ed8cea7af9d817df32d992e351a218e0d0996e
+        run: |
+          set -euo pipefail
+          git config user.name "Kailash Nelson"
+          git config user.email "37966146+KingLizard1020@users.noreply.github.com"
+          f=src/cmd/link/internal/ld/lib.go
+          git checkout "$GOOD" -- "$f"
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path("src/cmd/link/internal/ld/lib.go")
+          text = p.read_text()
+          n = len(text.splitlines())
+          if n < 3000:
+              raise SystemExit(f"restored file too small: {n} lines")
+          old = "\tif len(linker) == 0 {\n\t\treturn false\n\t}\n"
+          c = text.count(old)
+          if c != 2:
+              raise SystemExit(f"expected 2 empty-linker guards, found {c}")
+          p.write_text(text.replace(old, ""))
+          print(f"ok lines={len(p.read_text().splitlines())} removed={c}")
+          PY
+          git add -- "$f"
+          git diff --cached --stat
+          git commit -m "$(cat <<'EOF'
+          cmd/link: drop empty-linker guards in flag probes
+
+          Restore lib.go after an accidental truncation. extld() always
+          returns at least gcc or clang, matching findLibPathCmd.
+          EOF
+          )"
+          git push origin HEAD:cl-81163-linker-cc-args-v2
